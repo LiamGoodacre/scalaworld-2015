@@ -60,7 +60,7 @@ package object confree {
     import dsl.Dsl
 
     case class HelpState(help: String = "", indent: Int = 0) {
-      def --> (h: String): HelpState = 
+      def --> (h: String): HelpState =
         copy(help = help + (0 until indent * 2).foldLeft[String]("")((a, _) => a + " ") + h + "\n")
 
       def indented: HelpState = copy(indent = indent + 1)
@@ -68,22 +68,25 @@ package object confree {
     }
 
     def genHelp[A](config: Dsl[A]): String = {
-      type G[A] = State[HelpState, A]
+      type G[T] = State[HelpState, Const[Unit, T]]
+      implicit val applicativeG = Applicative[({type L[T] = State[HelpState, T]})#L]
+                                     .compose[({type L[T] = Const[Unit, T]})#L]
+      def log[T](s: String): G[T] = State.modify[HelpState](_ --> s).map(Const.apply)
 
-      def genHelp0[A](config: Dsl[A]): G[A] = {
+      def genHelp0[S](config: Dsl[S]): G[S] = {
         config.foldMap(new NaturalTransformation[ConfigF, G] {
-          def apply[A](value: ConfigF[A]): G[A] = value match {
-            case ConfigInt   (n, v) => State.modify[HelpState](_ --> (n + "\t - an integer"      )) *> v(0).point[G]
-            case ConfigFlag  (n, v) => State.modify[HelpState](_ --> (n + "\t - a boolean flag"  )) *> v(false).point[G]
-            case ConfigPort  (n, v) => State.modify[HelpState](_ --> (n + "\t - a port number"   )) *> v(0).point[G]
-            case ConfigServer(n, v) => State.modify[HelpState](_ --> (n + "\t - a server address")) *> v("").point[G]
-            case ConfigFile  (n, v) => State.modify[HelpState](_ --> (n + "\t - a file path"     )) *> v("").point[G]
-            case ConfigSub   (n, v) =>  for {
-                                          _ <- State.modify[HelpState](_ --> (n + "\t - a sub-configuration"))
-                                          _ <- State.modify[HelpState](_.indented)
-                                          a <- genHelp0(v)
-                                          _ <- State.modify[HelpState](_.dedented)
-                                        } yield a
+          def apply[T](value: ConfigF[T]): G[T] = value match {
+            case ConfigInt   (n, _) => log[T](n + "\t - an integer"      )
+            case ConfigFlag  (n, _) => log[T](n + "\t - a boolean flag"  )
+            case ConfigPort  (n, _) => log[T](n + "\t - a port number"   )
+            case ConfigServer(n, _) => log[T](n + "\t - a server address")
+            case ConfigFile  (n, _) => log[T](n + "\t - a file path"     )
+            case ConfigSub   (n, s) => for {
+              _ <- log[T](n + "\t - a sub-configuration")
+              _ <- State.modify[HelpState](_.indented)
+              _ <- genHelp0(s)
+              _ <- State.modify[HelpState](_.dedented)
+            } yield Const(())
           }
         })
       }
@@ -105,7 +108,7 @@ package object confree {
     val serverConfigDecode = json.genDecode(serverConfig)
     val serverConfigHelp   = help.genHelp(serverConfig)
 
-    val serverConfigJson = 
+    val serverConfigJson =
       Json("logging" -> jTrue, "auth" -> Json("port" -> jNumberOrNull(2020), "host" -> jString("localhost")))
 
     val serverConfigDecoded = serverConfigDecode.decodeJson(serverConfigJson)
