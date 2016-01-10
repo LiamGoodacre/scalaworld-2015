@@ -68,28 +68,26 @@ package object confree {
     }
 
     def genHelp[A](config: Dsl[A]): String = {
-      type G[T] = State[HelpState, Const[Unit, T]]
-      implicit val applicativeG = Applicative[({type L[T] = State[HelpState, T]})#L]
-                                     .compose[({type L[T] = Const[Unit, T]})#L]
-      def log[T](s: String): G[T] = State.modify[HelpState](_ --> s).map(Const.apply)
+      type M[T] = State[HelpState, T]
+      implicit val monoidM: Monoid[M[Unit]] = Monoid.liftMonoid[M, Unit]
+      def log(s: String): M[Unit] = State.modify[HelpState](_ --> s)
 
-      def genHelp0[S](config: Dsl[S]): G[S] = {
-        config.foldMap(new NaturalTransformation[ConfigF, G] {
-          def apply[T](value: ConfigF[T]): G[T] = value match {
-            case ConfigInt   (n, _) => log[T](n + "\t - an integer"      )
-            case ConfigFlag  (n, _) => log[T](n + "\t - a boolean flag"  )
-            case ConfigPort  (n, _) => log[T](n + "\t - a port number"   )
-            case ConfigServer(n, _) => log[T](n + "\t - a server address")
-            case ConfigFile  (n, _) => log[T](n + "\t - a file path"     )
+      def genHelp0[S](config: Dsl[S]): M[Unit] =
+        config.analyze(new NaturalTransformation[ConfigF, ({type L[T] = M[Unit]})#L] {
+          def apply[T](value: ConfigF[T]): M[Unit] = value match {
+            case ConfigInt   (n, _) => log(n + "\t - an integer"      )
+            case ConfigFlag  (n, _) => log(n + "\t - a boolean flag"  )
+            case ConfigPort  (n, _) => log(n + "\t - a port number"   )
+            case ConfigServer(n, _) => log(n + "\t - a server address")
+            case ConfigFile  (n, _) => log(n + "\t - a file path"     )
             case ConfigSub   (n, s) => for {
-              _ <- log[T](n + "\t - a sub-configuration")
+              _ <- log(n + "\t - a sub-configuration")
               _ <- State.modify[HelpState](_.indented)
               _ <- genHelp0(s)
               _ <- State.modify[HelpState](_.dedented)
-            } yield Const(())
+            } yield ()
           }
         })
-      }
 
       genHelp0(config).exec(HelpState()).help
     }
